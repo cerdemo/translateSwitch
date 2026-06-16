@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Translate Switch",
+  "version": "1.0.0",
+  "description": "Toggle the whole page between its original text and a chosen language with a keyboard shortcut, using Chrome's built-in on-device translation.",
+  "minimum_chrome_version": "138",
+  "permissions": ["scripting", "activeTab", "storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Translate Switch",
+    "default_popup": "popup.html"
+  },
+  "commands": {
+    "toggle-translate": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+E",
+        "mac": "Command+Shift+E"
+      },
+      "description": "Toggle the page between original and translated"
+    }
+  }
+}
