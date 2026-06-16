@@ -148,23 +148,64 @@
   }
 
   // ---------------------------------------------------- language detection
+  // Build a representative sample for detection. We prefer the LONGEST text
+  // nodes (real article/body copy) over the first ones, because the first
+  // nodes on a page are usually nav/header/cookie boilerplate that is often
+  // in English even when the page content is not -> misdetection.
+  function buildDetectionSample(nodes) {
+    const texts = nodes
+      .map((n) => (n.nodeValue || "").trim())
+      .filter((t) => t.length > 0)
+      .sort((a, b) => b.length - a.length);
+    let sample = "";
+    for (const t of texts) {
+      sample += t + "\n";
+      if (sample.length >= 4000) break;
+    }
+    return sample.slice(0, 4000);
+  }
+
   async function detectSourceLanguage(sample) {
+    const docLang = baseLang(document.documentElement.lang || "");
     try {
       if ("LanguageDetector" in self) {
         const availability = await LanguageDetector.availability();
         if (availability !== "unavailable") {
           const detector = await LanguageDetector.create();
           const results = await detector.detect(sample);
-          const best = results && results[0];
-          if (best && best.detectedLanguage && best.detectedLanguage !== "und") {
-            return best.detectedLanguage;
+          try {
+            detector.destroy && detector.destroy();
+          } catch (e) {
+            /* noop */
+          }
+          if (results && results.length) {
+            // If the page declares a language and the detector also lists it
+            // with non-trivial confidence, trust the declared language. This
+            // prevents a Norwegian article from being read as English just
+            // because its menu/cookie text is English.
+            if (docLang) {
+              const declared = results.find(
+                (r) => baseLang(r.detectedLanguage) === docLang
+              );
+              if (declared && (declared.confidence == null || declared.confidence >= 0.1)) {
+                return docLang;
+              }
+            }
+            const best = results[0];
+            if (
+              best &&
+              best.detectedLanguage &&
+              best.detectedLanguage !== "und" &&
+              (best.confidence == null || best.confidence >= 0.5)
+            ) {
+              return best.detectedLanguage;
+            }
           }
         }
       }
     } catch (e) {
       // ignore and fall through to document language
     }
-    const docLang = (document.documentElement.lang || "").split("-")[0];
     return docLang || "en";
   }
 
@@ -197,7 +238,7 @@
       return false;
     }
 
-    const sample = nodes.slice(0, 25).map((n) => n.nodeValue).join(" ").slice(0, 1000);
+    const sample = buildDetectionSample(nodes);
     const source = baseLang(await detectSourceLanguage(sample));
     const target = pickTarget(source, pair);
     state.sourceLanguage = source;
@@ -337,7 +378,7 @@
 
   async function translateFallback(pair) {
     const nodes = collectTextNodes();
-    const sample = nodes.slice(0, 25).map((n) => n.nodeValue).join(" ").slice(0, 1000);
+    const sample = buildDetectionSample(nodes);
     const source = baseLang(await detectSourceLanguage(sample));
     const target = pickTarget(source, pair);
     state.sourceLanguage = source;

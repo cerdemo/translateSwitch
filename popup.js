@@ -59,7 +59,10 @@ const DEFAULT_LANG_B = "no";
 
 function populateSelect(selectId, selected) {
   const select = document.getElementById(selectId);
-  for (const [code, name] of LANGUAGES) {
+  const sorted = [...LANGUAGES].sort((a, b) =>
+    a[1].localeCompare(b[1])
+  );
+  for (const [code, name] of sorted) {
     const opt = document.createElement("option");
     opt.value = code;
     opt.textContent = `${name} (${code})`;
