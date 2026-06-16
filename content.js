@@ -262,10 +262,16 @@
       return "unsupported-pair";
     }
 
+    // The model is only actually fetched when it is not already on-device.
+    // When it is cached, create() still emits downloadprogress events (going
+    // straight to 100%), so we must NOT show a "Downloading" toast in that
+    // case or it would appear on every page.
+    const needsDownload = availability !== "available";
+
     toast(
-      availability === "available"
-        ? `Translating ${source} -> ${target}...`
-        : `Preparing ${source} -> ${target} model...`,
+      needsDownload
+        ? `Preparing ${source} -> ${target} model...`
+        : `Translating ${source} -> ${target}...`,
       { sticky: true }
     );
 
@@ -275,6 +281,7 @@
         ...options,
         monitor(m) {
           m.addEventListener("downloadprogress", (e) => {
+            if (!needsDownload) return;
             const pct = Math.round((e.loaded || 0) * 100);
             toast(`Downloading model... ${pct}%`, { sticky: true });
           });
