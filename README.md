@@ -1,6 +1,6 @@
 # Translate Switch
 
-A drop-in Google Chrome extension that toggles any web page between its
+A Google Chrome extension that toggles any web page between its
 **original text** and a **chosen translation language** with a single keyboard
 shortcut. Press once to translate, press again to switch back — instantly.
 
