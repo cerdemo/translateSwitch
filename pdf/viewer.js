@@ -612,15 +612,15 @@ function renderTip(x, y, parts) {
   if (!tip) return;
   tip.textContent = "";
   if (parts.loading) {
-    tip.textContent = "Looking up origin...";
+    tip.textContent = parts.loadingText || "Looking up...";
   } else {
     const orig = document.createElement("div");
     orig.className = "gloss-origin";
-    orig.textContent = (parts.approximate ? "≈ " : "") + parts.original;
+    orig.textContent = (parts.approximate ? "≈ " : "") + parts.result;
     tip.appendChild(orig);
     const cap = document.createElement("div");
     cap.className = "gloss-caption";
-    cap.textContent = `${app.target} "${parts.word}" -> ${app.source}`;
+    cap.textContent = `${parts.fromLang} "${parts.word}" -> ${parts.toLang}`;
     tip.appendChild(cap);
   }
   tip.classList.add("is-visible");
@@ -648,16 +648,12 @@ function getSelectionInfo() {
 }
 
 async function processSelection() {
-  if (app.mode !== "translated") {
-    hideTip();
-    return;
-  }
   const info = getSelectionInfo();
   if (!info) {
     hideTip();
     return;
   }
-  // Only react to selections made in the translated (right) column.
+  // React to selections made in the right text column (translated or original).
   const rec = recordFromNode(info.node);
   if (!rec || !rec.spanText) {
     hideTip();
@@ -669,49 +665,84 @@ async function processSelection() {
     return;
   }
 
+  // Translated mode: selection is a target word -> show its source origin.
+  // Original mode: selection is a source word -> show its target translation.
+  // Either way we highlight the matching source word on the original page (left).
+  const translatedMode = app.mode === "translated";
+  const fromLang = translatedMode ? app.target : app.source;
+  const toLang = translatedMode ? app.source : app.target;
+
   const rect = info.range.getBoundingClientRect();
   const x = rect.left;
   const y = rect.bottom;
 
-  const key = rec.num + "::" + phrase;
+  const key = app.mode + "::" + rec.num + "::" + phrase;
   if (key === gloss.lastKey && gloss.tip.classList.contains("is-visible")) {
     positionTip(x, y);
     return;
   }
   gloss.lastKey = key;
   clearGlossHighlight();
-  renderTip(x, y, { loading: true });
+  renderTip(x, y, {
+    loading: true,
+    loadingText: translatedMode ? "Looking up origin..." : "Looking up translation..."
+  });
 
   const myReq = ++gloss.reqId;
-  let result = rec.glossCache.get(phrase);
+  const cacheKey = app.mode + "::" + phrase;
+  let result = rec.glossCache.get(cacheKey);
   if (!result) {
-    const back = await TSGloss.backTranslate(phrase, app.target, app.source);
-    if (myReq !== gloss.reqId) return;
-    const found = back ? TSGloss.locate(back, rec.spanText) : null;
-    result = { back, found };
-    rec.glossCache.set(phrase, result);
+    if (translatedMode) {
+      const back = await TSGloss.backTranslate(phrase, fromLang, toLang);
+      if (myReq !== gloss.reqId) return;
+      const found = back ? TSGloss.locate(back, rec.spanText) : null;
+      result = { ok: !!back, display: back, found };
+    } else {
+      // The selected word is already source text: locate it directly, and
+      // translate it forward for the tooltip.
+      const found = TSGloss.locate(phrase, rec.spanText);
+      const fwd = await TSGloss.backTranslate(phrase, fromLang, toLang);
+      if (myReq !== gloss.reqId) return;
+      result = { ok: !!fwd, display: fwd, found };
+    }
+    if (result.ok) rec.glossCache.set(cacheKey, result);
   }
   if (myReq !== gloss.reqId) return;
 
-  if (!result.back) {
+  if (!result.ok) {
     renderTip(x, y, {
       word: phrase,
-      original: "origin model not ready - click 'Download translation models' in the popup",
+      result: "model not ready - click 'Download translation models' in the popup",
+      fromLang,
+      toLang,
       approximate: true
     });
+    if (result.found) {
+      highlightSourceRange(rec, result.found.start, result.found.end);
+    }
     return;
   }
-  const original = result.found ? result.found.text : result.back;
+
+  const shown = translatedMode
+    ? result.found
+      ? result.found.text
+      : result.display
+    : result.display;
+  const approximate = translatedMode
+    ? !result.found || result.found.approximate
+    : false;
   renderTip(x, y, {
     word: phrase,
-    original,
-    approximate: !result.found || result.found.approximate
+    result: shown,
+    fromLang,
+    toLang,
+    approximate
   });
   TSGloss.logLookup({
     term: phrase,
-    origin: original,
-    src: app.source,
-    tgt: app.target
+    origin: shown,
+    src: toLang,
+    tgt: fromLang
   });
 
   if (result.found) {

@@ -61,14 +61,17 @@ by normal page scripts, so PDFs use a dedicated viewer.
 
 When you are reading translated text, you can check where a word came from:
 
-- **Select** a translated word or phrase with the mouse (double-click a word, or
-  click-drag a phrase).
-  - On a **web page**, a tooltip shows the **original word** in the source
-    language.
-  - In a **PDF**, the matching word(s) are also **highlighted on the original
-    page** in the left column.
+- **Select** a word or phrase with the mouse (double-click a word, or click-drag
+  a phrase). It works **both ways**:
+  - While viewing the **translation**, selecting a translated word shows its
+    **original** (source) word.
+  - While viewing the **original**, selecting an original word shows its
+    **translation** (target) word.
+  - On a **web page** the counterpart appears in a tooltip; in a **PDF** the
+    matching word(s) are also **highlighted on the original page** (left column).
 - Example: on the English translation of a Norwegian page, selecting
-  "care responsibility" reveals it came from **"omsorgsansvar"**.
+  "care responsibility" reveals it came from **"omsorgsansvar"** - and on the
+  original, selecting "omsorgsansvar" reveals "care responsibility".
 - How it works: the built-in translator returns no word alignment, so the
   extension **back-translates** the hovered word on-device (target -> source)
   and fuzzy-matches it against the known source text. Approximate matches are

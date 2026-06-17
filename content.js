@@ -228,7 +228,10 @@
       }
     }
     state.mode = "original";
-    disableGloss();
+    // Keep the gloss active so selecting an original word reveals its
+    // translation (the reverse direction).
+    enableGloss();
+    hideTip();
     toast("Original");
   }
 
@@ -316,19 +319,19 @@
     if (!tip) return;
     tip.textContent = "";
     if (parts.loading) {
-      tip.textContent = "Looking up origin...";
+      tip.textContent = parts.loadingText || "Looking up...";
     } else {
       const orig = document.createElement("div");
       orig.style.fontWeight = "600";
       orig.style.fontSize = "15px";
-      orig.textContent = (parts.approximate ? "≈ " : "") + parts.original;
+      orig.textContent = (parts.approximate ? "≈ " : "") + parts.result;
       tip.appendChild(orig);
 
       const cap = document.createElement("div");
       cap.style.opacity = "0.7";
       cap.style.fontSize = "12px";
       cap.style.marginTop = "2px";
-      cap.textContent = `${state.targetLanguage} "${parts.word}" -> ${state.sourceLanguage}`;
+      cap.textContent = `${parts.fromLang} "${parts.word}" -> ${parts.toLang}`;
       tip.appendChild(cap);
     }
     tip.style.opacity = "1";
@@ -373,7 +376,7 @@
   }
 
   async function processSelection() {
-    if (!gloss.enabled || state.mode !== "translated") return;
+    if (!gloss.enabled) return;
     const info = getSelectionInfo();
     if (!info) {
       hideTip();
@@ -388,7 +391,7 @@
       return;
     }
     const entry = findEntryForSelection(info);
-    if (!entry || !entry.original) {
+    if (!entry || entry.original == null || entry.translated == null) {
       hideTip();
       return;
     }
@@ -398,51 +401,62 @@
       return;
     }
 
+    // Direction depends on what is currently shown. In translated mode the
+    // selection is a target word -> show its source origin; in original mode it
+    // is a source word -> show its target translation.
+    const translatedMode = state.mode === "translated";
+    const fromLang = translatedMode ? state.targetLanguage : state.sourceLanguage;
+    const toLang = translatedMode ? state.sourceLanguage : state.targetLanguage;
+    const searchText = translatedMode ? entry.original : entry.translated;
+
     const rect = info.range.getBoundingClientRect();
     const x = rect.left;
     const y = rect.bottom;
 
-    const key = entry.original + "::" + phrase;
+    const key = state.mode + "::" + searchText + "::" + phrase;
     if (key === gloss.lastKey && gloss.tip && gloss.tip.style.opacity === "1") {
       positionTip(x, y);
       return;
     }
     gloss.lastKey = key;
-    renderTip(x, y, { loading: true });
+    renderTip(x, y, {
+      loading: true,
+      loadingText: translatedMode ? "Looking up origin..." : "Looking up translation..."
+    });
 
     const myReq = ++gloss.reqId;
-    const back = await TSGloss.backTranslate(
-      phrase,
-      state.targetLanguage,
-      state.sourceLanguage
-    );
+    const translated = await TSGloss.backTranslate(phrase, fromLang, toLang);
     if (myReq !== gloss.reqId) return; // a newer selection superseded this one
 
-    if (!back) {
+    if (!translated) {
       renderTip(x, y, {
         word: phrase,
-        original: "origin model not ready - open the popup and click 'Download translation models'",
+        result: "model not ready - open the popup and click 'Download translation models'",
+        fromLang,
+        toLang,
         approximate: true
       });
       return;
     }
-    const found = TSGloss.locate(back, entry.original);
-    const origin = found ? found.text : back;
+    const found = TSGloss.locate(translated, searchText);
+    const result = found ? found.text : translated;
     renderTip(x, y, {
       word: phrase,
-      original: origin,
+      result,
+      fromLang,
+      toLang,
       approximate: !found || found.approximate
     });
     TSGloss.logLookup({
       term: phrase,
-      origin,
-      src: state.sourceLanguage,
-      tgt: state.targetLanguage
+      origin: result,
+      src: toLang,
+      tgt: fromLang
     });
   }
 
   function onGlossMouseUp() {
-    if (!gloss.enabled || state.mode !== "translated") return;
+    if (!gloss.enabled) return;
     // Let the selection settle before reading it.
     clearTimeout(gloss.timer);
     gloss.timer = setTimeout(processSelection, 0);
