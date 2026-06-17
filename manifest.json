@@ -5,6 +5,7 @@
   "description": "Toggle the whole page between its original text and a chosen language with a keyboard shortcut, using Chrome's built-in on-device translation.",
   "minimum_chrome_version": "138",
   "permissions": ["scripting", "activeTab", "storage"],
+  "host_permissions": ["http://*/*", "https://*/*", "file:///*"],
   "background": {
     "service_worker": "background.js"
   },

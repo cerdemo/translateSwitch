@@ -1,6 +1,6 @@
 # Translate Switch
 
-A Google Chrome extension that toggles any web page between its
+A `Google Chrome extension that toggles any web page between its
 **original text** and a **chosen translation language** with a single keyboard
 shortcut. Press once to translate, press again to switch back — instantly.
 
@@ -39,6 +39,23 @@ swaps cached text, so it is instant.
   - set the **language pair** (Language A / Language B),
   - **toggle the current page** with a button,
   - jump to Chrome's shortcut settings.
+
+### Translating PDFs
+
+Chrome renders PDFs with its internal PDFium plugin, whose text is unreachable
+by normal page scripts, so PDFs use a dedicated viewer.
+
+- While viewing a PDF, press the **shortcut** (or click **Toggle this page** in
+  the popup). The extension opens a **side-by-side viewer** in a new tab: the
+  rendered PDF page on the left, its translated text on the right.
+- Use the **Original / Translated** switch in the viewer's toolbar to flip the
+  text pane between the extracted original text and the translation.
+- Pages are rendered and translated **as you scroll**, and results are cached so
+  switching is instant.
+- **Local PDFs** (`file://`) work too, but you must enable
+  **"Allow access to file URLs"** on the extension's details page
+  (`chrome://extensions` -> Translate Switch -> Details).
+- The same language pair and on-device models are used as for web pages.
 
 ## Requirements
 
@@ -84,12 +101,19 @@ Shortcut ──> background.js ──(chrome.scripting)──> content.js (activ
 ```
 
 - `manifest.json` — MV3 config, the `toggle-translate` command, popup, and
-  permissions (`scripting`, `activeTab`, `storage`).
-- `background.js` — listens for the shortcut and injects `content.js` into the
-  active tab. The content script is idempotent: re-injection just toggles.
+  permissions (`scripting`, `activeTab`, `storage`, plus `host_permissions` for
+  fetching PDF bytes).
+- `background.js` — listens for the shortcut. For normal pages it injects
+  `content.js` into the active tab (idempotent: re-injection just toggles). For
+  PDFs it opens the bundled PDF viewer instead.
 - `content.js` — text-node collection, language detection, translation, instant
   cached toggling, the Google Translate fallback, and an on-page status toast.
 - `popup.html` / `popup.js` — target language selection and quick actions.
+- `pdf/viewer.html` / `pdf/viewer.css` / `pdf/viewer.js` — side-by-side PDF
+  viewer: PDF.js renders each page (left) and translates its extracted text
+  (right), with an Original/Translated toggle and lazy, cached per-page work.
+- `vendor/pdfjs/` — bundled [PDF.js](https://mozilla.github.io/pdf.js/) build
+  (no remote code, as required by MV3).
 
 ## Limitations
 
@@ -98,3 +122,7 @@ Shortcut ──> background.js ──(chrome.scripting)──> content.js (activ
 - Very large pages take longer on first translation (text is translated
   sequentially); subsequent toggles remain instant.
 - The fallback widget relies on Google's public service and the page's CSP.
+- **PDFs:** scanned/image-only PDFs have no text layer and can't be translated
+  (no OCR). The translated text is reflowed, not pixel-aligned to the original
+  lines, and auth-gated PDFs may fail to load if cookies aren't sent. The PDF
+  viewer requires the built-in `Translator` API (no Google fallback).

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Translate Switch - PDF</title>
+    <link rel="stylesheet" href="viewer.css" />
+  </head>
+  <body>
+    <header id="toolbar">
+      <div class="toolbar-left">
+        <span id="doc-title" title="">PDF</span>
+      </div>
+      <div class="toolbar-center">
+        <span id="lang-indicator" class="lang-indicator"></span>
+      </div>
+      <div class="toolbar-right">
+        <div id="text-toggle" class="seg" role="group" aria-label="Text pane mode">
+          <button id="btn-original" class="seg-btn" type="button">Original</button>
+          <button id="btn-translated" class="seg-btn is-active" type="button">
+            Translated
+          </button>
+        </div>
+        <a id="back-link" class="back-link" href="#" target="_blank" rel="noopener">
+          Open original PDF
+        </a>
+      </div>
+    </header>
+
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+
+    <main id="pages" class="pages" aria-busy="true"></main>
+
+    <script type="module" src="viewer.js"></script>
+  </body>
+</html>
