@@ -81,23 +81,83 @@ function filenameFromUrl(url) {
   }
 }
 
-// Reconstruct readable text from a page's text content items. PDF.js marks
-// line ends with hasEOL; we also insert a blank line on large vertical gaps
-// so paragraphs stay separated.
+// Reconstruct readable text from a page's text content items.
+//
+// PDF text is a bag of positioned glyph runs, so naive concatenation produces
+// run-together words and one hard line break per visual line. We instead:
+//   1. group runs into visual lines (by baseline Y, respecting hasEOL),
+//   2. join runs within a line, inserting spaces where there is a horizontal
+//      gap (PDF.js often omits the spaces between runs),
+//   3. merge consecutive lines into flowing paragraphs, joining hyphenated
+//      word breaks, and start a new paragraph on a large vertical gap or when
+//      the text jumps to a new column/region.
 function itemsToText(textContent) {
-  const items = textContent.items || [];
-  let out = "";
-  let prevY = null;
-  for (const it of items) {
-    if (typeof it.str !== "string") continue;
-    const y = it.transform ? it.transform[5] : null;
-    if (prevY != null && y != null && Math.abs(prevY - y) > 18 && !out.endsWith("\n\n")) {
-      out += "\n";
+  const raw = (textContent.items || []).filter(
+    (it) => it && typeof it.str === "string" && it.transform
+  );
+  if (!raw.length) return "";
+
+  // ---- 1. group runs into visual lines ----------------------------------
+  const lines = [];
+  let current = null;
+  for (const it of raw) {
+    const x = it.transform[4];
+    const y = it.transform[5];
+    const w = it.width || 0;
+    const h = it.height || Math.abs(it.transform[3]) || 10;
+
+    if (!current || Math.abs(current.y - y) > Math.max(2, current.h * 0.5)) {
+      current = { y, h, runs: [] };
+      lines.push(current);
     }
-    out += it.str;
-    if (it.hasEOL) out += "\n";
-    if (y != null) prevY = y;
+    if (it.str) current.runs.push({ str: it.str, x, w });
+    current.h = Math.max(current.h, h);
+    if (it.hasEOL) current = null; // force the next run onto a new line
   }
+
+  // ---- 2. build each line's text, restoring inter-word spaces ------------
+  const built = [];
+  for (const line of lines) {
+    const runs = line.runs.sort((a, b) => a.x - b.x);
+    let text = "";
+    let prevEnd = null;
+    for (const r of runs) {
+      if (prevEnd != null) {
+        const gap = r.x - prevEnd;
+        const avgChar = r.w && r.str.length ? r.w / r.str.length : 0;
+        const needsSpace = gap > Math.max(1, avgChar * 0.3);
+        if (needsSpace && !/\s$/.test(text) && !/^\s/.test(r.str)) {
+          text += " ";
+        }
+      }
+      text += r.str;
+      prevEnd = r.x + r.w;
+    }
+    text = text.replace(/\s+/g, " ").trim();
+    if (text) built.push({ text, y: line.y, h: line.h });
+  }
+  if (!built.length) return "";
+
+  // ---- 3. merge lines into paragraphs -----------------------------------
+  let out = built[0].text;
+  for (let i = 1; i < built.length; i++) {
+    const line = built[i];
+    const prev = built[i - 1];
+    const delta = prev.y - line.y; // PDF Y grows upward; reading goes downward
+    const lineHeight = Math.max(prev.h, line.h, 1);
+    const newParagraph = delta < -2 || delta > lineHeight * 1.6;
+
+    if (newParagraph) {
+      out += "\n\n";
+      out += line.text;
+    } else if (/[\u00AD-]$/.test(out) && /[A-Za-zÀ-ÿ]/.test(line.text[0] || "")) {
+      // Join a hyphenated word split across lines.
+      out = out.replace(/[\u00AD-]$/, "") + line.text;
+    } else {
+      out += " " + line.text;
+    }
+  }
+
   return out.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
@@ -197,16 +257,29 @@ async function ensureTranslator() {
   return app.translator;
 }
 
-async function translateText(translator, text) {
-  if (!text || !text.trim()) return text;
-  const paragraphs = text.split(/\n{2,}/);
+// Translate a single paragraph (no internal blank lines). Long paragraphs are
+// split on sentence boundaries so we never send an oversized request.
+async function translateParagraph(translator, para) {
+  const trimmed = para.trim();
+  if (!trimmed) return "";
+  if (trimmed.length <= MAX_CHUNK_CHARS) {
+    try {
+      return (await translator.translate(trimmed)).trim();
+    } catch (e) {
+      return trimmed;
+    }
+  }
+
+  const sentences = trimmed.match(/[^.!?]+[.!?]+[\])'"`’”]*|\S[^.!?]*$/g) || [
+    trimmed
+  ];
   const chunks = [];
   let cur = "";
-  for (const p of paragraphs) {
-    const candidate = cur ? cur + "\n\n" + p : p;
+  for (const s of sentences) {
+    const candidate = cur ? cur + " " + s.trim() : s.trim();
     if (candidate.length > MAX_CHUNK_CHARS && cur) {
       chunks.push(cur);
-      cur = p;
+      cur = s.trim();
     } else {
       cur = candidate;
     }
@@ -216,10 +289,23 @@ async function translateText(translator, text) {
   const out = [];
   for (const c of chunks) {
     try {
-      out.push(await translator.translate(c));
+      out.push((await translator.translate(c)).trim());
     } catch (e) {
-      out.push(c); // keep original chunk on failure
+      out.push(c);
     }
+  }
+  return out.join(" ");
+}
+
+// Translate text paragraph-by-paragraph so paragraph spacing is preserved
+// regardless of how the model treats blank lines inside a single request.
+async function translateText(translator, text) {
+  if (!text || !text.trim()) return text;
+  const paragraphs = text.split(/\n{2,}/);
+  const out = [];
+  for (const p of paragraphs) {
+    if (!p.trim()) continue;
+    out.push(await translateParagraph(translator, p));
   }
   return out.join("\n\n");
 }
@@ -282,7 +368,15 @@ function renderTextBody(rec) {
     return;
   }
   rec.textBody.className = "text-body";
-  rec.textBody.textContent = text;
+  rec.textBody.textContent = "";
+  const paragraphs = text.split(/\n{2,}/);
+  for (const para of paragraphs) {
+    if (!para.trim()) continue;
+    const p = document.createElement("p");
+    p.className = "para";
+    p.textContent = para;
+    rec.textBody.appendChild(p);
+  }
 }
 
 async function renderCanvas(rec, page) {

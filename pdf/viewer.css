@@ -177,9 +177,20 @@ body {
 }
 
 .text-col .text-body {
-  padding: 14px 16px;
-  white-space: pre-wrap;
+  padding: 16px 18px;
+  font-size: 15px;
+  line-height: 1.65;
   word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.text-col .text-body .para {
+  margin: 0 0 0.9em 0;
+  white-space: pre-wrap;
+}
+
+.text-col .text-body .para:last-child {
+  margin-bottom: 0;
 }
 
 .text-col .text-placeholder {
