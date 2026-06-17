@@ -79,6 +79,21 @@ When you are reading translated text, you can check where a word came from:
 - It works only on **built-in-translated** content (not the Google Translate
   fallback) and only while the **translation** is shown.
 
+### Word frequency (vocabulary you look up)
+
+Every successful origin lookup is recorded locally (in `chrome.storage.local`).
+Open the popup and click **Word frequency** to see your **most frequently
+looked-up words** ranked by count, each shown as `selected word -> origin` with a
+"last seen" time. This is meant as a personal study aid.
+
+- **Direction** toggles the display between `Translated -> Origin` and
+  `Origin -> Translated`.
+- **Export CSV** downloads the full history (term, origin, source, target,
+  count, first/last seen) for use in a spreadsheet or flashcard app.
+- **Clear history** resets the list.
+
+The list never leaves your device.
+
 ## Requirements
 
 - **Chrome 138+ on desktop** (Windows, macOS, Linux, ChromeOS) for the built-in
@@ -130,7 +145,8 @@ Shortcut ──> background.js ──(chrome.scripting)──> content.js (activ
   PDFs it opens the bundled PDF viewer instead.
 - `content.js` — text-node collection, language detection, translation, instant
   cached toggling, the Google Translate fallback, and an on-page status toast.
-- `popup.html` / `popup.js` — target language selection and quick actions.
+- `popup.html` / `popup.js` — target language selection, quick actions, and the
+  word-frequency view of your looked-up words.
 - `pdf/viewer.html` / `pdf/viewer.css` / `pdf/viewer.js` — side-by-side PDF
   viewer: PDF.js renders each page (left) and translates its extracted text
   (right), with an Original/Translated toggle, lazy cached per-page work, and the

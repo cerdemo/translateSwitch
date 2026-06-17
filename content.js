@@ -427,10 +427,17 @@
       return;
     }
     const found = TSGloss.locate(back, entry.original);
+    const origin = found ? found.text : back;
     renderTip(x, y, {
       word: phrase,
-      original: found ? found.text : back,
+      original: origin,
       approximate: !found || found.approximate
+    });
+    TSGloss.logLookup({
+      term: phrase,
+      origin,
+      src: state.sourceLanguage,
+      tgt: state.targetLanguage
     });
   }
 

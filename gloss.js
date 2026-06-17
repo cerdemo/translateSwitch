@@ -224,7 +224,58 @@
     return wordRangeFromCaret(node, offset);
   }
 
+  // ------------------------------------------------ looked-up word logging
+  // Records each successful origin lookup in chrome.storage.local so the popup
+  // can show the most frequently looked-up words. Entries are keyed by the
+  // language pair + the selected term (case-insensitive).
+  const LOOKUP_KEY = "wordLookups";
+  const LOOKUP_CAP = 2000;
+
+  function logLookup(entry) {
+    try {
+      if (!entry || !entry.term) return;
+      const term = entry.term.trim();
+      if (!term || term.length > 80) return;
+      if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) {
+        return;
+      }
+      const src = entry.src || "";
+      const tgt = entry.tgt || "";
+      const key = `${tgt}|${src}|${term.toLowerCase()}`;
+      chrome.storage.local.get({ [LOOKUP_KEY]: {} }, (res) => {
+        const map = (res && res[LOOKUP_KEY]) || {};
+        const now = Date.now();
+        const cur = map[key] || {
+          term,
+          origin: entry.origin || "",
+          src,
+          tgt,
+          count: 0,
+          first: now
+        };
+        cur.count += 1;
+        cur.last = now;
+        cur.term = term;
+        if (entry.origin) cur.origin = entry.origin;
+        map[key] = cur;
+
+        const keys = Object.keys(map);
+        if (keys.length > LOOKUP_CAP) {
+          keys.sort(
+            (a, b) =>
+              map[a].count - map[b].count || (map[a].last || 0) - (map[b].last || 0)
+          );
+          for (let i = 0; i < keys.length - LOOKUP_CAP; i++) delete map[keys[i]];
+        }
+        chrome.storage.local.set({ [LOOKUP_KEY]: map });
+      });
+    } catch (e) {
+      /* logging is best-effort */
+    }
+  }
+
   globalThis.TSGloss = {
+    LOOKUP_KEY,
     getTranslator,
     backTranslate,
     normalize,
@@ -232,6 +283,7 @@
     tokenize,
     similarity,
     locate,
-    wordAtPoint
+    wordAtPoint,
+    logLookup
   };
 })();

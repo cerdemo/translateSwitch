@@ -707,6 +707,12 @@ async function processSelection() {
     original,
     approximate: !result.found || result.found.approximate
   });
+  TSGloss.logLookup({
+    term: phrase,
+    origin: original,
+    src: app.source,
+    tgt: app.target
+  });
 
   if (result.found) {
     highlightSourceRange(rec, result.found.start, result.found.end);

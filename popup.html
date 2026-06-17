@@ -80,6 +80,70 @@
         border-radius: 4px;
         padding: 1px 5px;
       }
+      #freq-panel {
+        margin-top: 10px;
+      }
+      .freq-list {
+        max-height: 220px;
+        overflow: auto;
+        border: 1px solid rgba(128, 128, 128, 0.3);
+        border-radius: 8px;
+      }
+      .freq-item {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        padding: 6px 9px;
+      }
+      .freq-item + .freq-item {
+        border-top: 1px solid rgba(128, 128, 128, 0.18);
+      }
+      .freq-rank {
+        opacity: 0.5;
+        font-variant-numeric: tabular-nums;
+        min-width: 16px;
+      }
+      .freq-words {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      .freq-term {
+        font-weight: 600;
+      }
+      .freq-origin {
+        opacity: 0.75;
+      }
+      .freq-time {
+        display: block;
+        opacity: 0.5;
+        font-size: 11px;
+        margin-top: 1px;
+      }
+      .freq-controls button,
+      .freq-actions button {
+        margin-top: 8px;
+      }
+      .freq-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .freq-actions button {
+        flex: 1;
+      }
+      .freq-count {
+        font-variant-numeric: tabular-nums;
+        background: rgba(26, 115, 232, 0.15);
+        color: #1a73e8;
+        border-radius: 10px;
+        padding: 1px 8px;
+        font-weight: 600;
+        font-size: 12px;
+      }
+      .freq-empty {
+        padding: 10px;
+        opacity: 0.7;
+        font-size: 12px;
+      }
     </style>
   </head>
   <body>
@@ -104,6 +168,20 @@
     <p class="hint">
       Default shortcut: <kbd>Ctrl/Cmd</kbd> + <kbd>Shift</kbd> + <kbd>E</kbd>
     </p>
+
+    <button id="freq-toggle" class="secondary">Word frequency</button>
+    <div id="freq-panel" style="display: none;">
+      <div class="freq-controls">
+        <button id="freq-direction" class="secondary">
+          Direction: Translated &rarr; Origin
+        </button>
+      </div>
+      <div class="freq-list" id="freq-list"></div>
+      <div class="freq-actions">
+        <button id="freq-export" class="secondary">Export CSV</button>
+        <button id="freq-clear" class="secondary">Clear history</button>
+      </div>
+    </div>
 
     <script src="popup.js"></script>
   </body>
