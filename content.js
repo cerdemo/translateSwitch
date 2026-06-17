@@ -217,6 +217,7 @@
       }
     }
     state.mode = "translated";
+    enableGloss();
     toast("Translated");
   }
 
@@ -227,7 +228,253 @@
       }
     }
     state.mode = "original";
+    disableGloss();
     toast("Original");
+  }
+
+  // -------------------------------------------- word origin gloss (hover)
+  // Only meaningful for the built-in path, where we cache per-node originals.
+  const gloss = {
+    enabled: false,
+    tip: null,
+    highlight: null,
+    timer: null,
+    reqId: 0,
+    lastKey: null
+  };
+
+  function ensureGlossUi() {
+    if (!gloss.tip) {
+      const tip = document.createElement("div");
+      tip.id = "__ts_gloss_tip";
+      Object.assign(tip.style, {
+        position: "fixed",
+        zIndex: "2147483647",
+        maxWidth: "320px",
+        padding: "8px 10px",
+        borderRadius: "8px",
+        background: "rgba(32,33,36,0.97)",
+        color: "#fff",
+        font: "13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif",
+        boxShadow: "0 6px 20px rgba(0,0,0,0.3)",
+        opacity: "0",
+        transition: "opacity 0.12s ease",
+        pointerEvents: "none"
+      });
+      document.documentElement.appendChild(tip);
+      gloss.tip = tip;
+    }
+    if (
+      !gloss.highlight &&
+      typeof Highlight !== "undefined" &&
+      typeof CSS !== "undefined" &&
+      CSS.highlights
+    ) {
+      try {
+        gloss.highlight = new Highlight();
+        CSS.highlights.set("ts-origin", gloss.highlight);
+        const style = document.createElement("style");
+        style.id = "__ts_gloss_style";
+        style.textContent =
+          "::highlight(ts-origin){background-color:rgba(26,115,232,0.30);}";
+        document.documentElement.appendChild(style);
+      } catch (e) {
+        gloss.highlight = null;
+      }
+    }
+  }
+
+  function setGlossHighlight(range) {
+    if (!gloss.highlight) return;
+    try {
+      gloss.highlight.clear();
+      if (range) gloss.highlight.add(range);
+    } catch (e) {
+      /* noop */
+    }
+  }
+
+  function positionTip(x, y) {
+    const tip = gloss.tip;
+    if (!tip) return;
+    const pad = 14;
+    const rect = tip.getBoundingClientRect();
+    let left = x + pad;
+    let top = y + pad;
+    if (left + rect.width > window.innerWidth - 8) {
+      left = Math.max(8, x - pad - rect.width);
+    }
+    if (top + rect.height > window.innerHeight - 8) {
+      top = Math.max(8, y - pad - rect.height);
+    }
+    tip.style.left = left + "px";
+    tip.style.top = top + "px";
+  }
+
+  function renderTip(x, y, parts) {
+    const tip = gloss.tip;
+    if (!tip) return;
+    tip.textContent = "";
+    if (parts.loading) {
+      tip.textContent = "Looking up origin...";
+    } else {
+      const orig = document.createElement("div");
+      orig.style.fontWeight = "600";
+      orig.style.fontSize = "15px";
+      orig.textContent = (parts.approximate ? "≈ " : "") + parts.original;
+      tip.appendChild(orig);
+
+      const cap = document.createElement("div");
+      cap.style.opacity = "0.7";
+      cap.style.fontSize = "12px";
+      cap.style.marginTop = "2px";
+      cap.textContent = `${state.targetLanguage} "${parts.word}" -> ${state.sourceLanguage}`;
+      tip.appendChild(cap);
+    }
+    tip.style.opacity = "1";
+    positionTip(x, y);
+  }
+
+  function hideTip() {
+    if (gloss.tip) gloss.tip.style.opacity = "0";
+    gloss.lastKey = null;
+    setGlossHighlight(null);
+  }
+
+  function getSelectionInfo() {
+    const sel = window.getSelection && window.getSelection();
+    if (!sel || sel.isCollapsed) return null;
+    const text = sel.toString().trim();
+    if (!text) return null;
+    let range;
+    try {
+      range = sel.getRangeAt(0);
+    } catch (e) {
+      return null;
+    }
+    return { text, range, node: range.startContainer };
+  }
+
+  function findEntryForSelection(info) {
+    let entry = state.entries.find((en) => en.node === info.node);
+    if (entry) return entry;
+    // Selection may start in an element or span nodes: fall back to the first
+    // cached node the range touches.
+    if (info.range.intersectsNode) {
+      entry = state.entries.find((en) => {
+        try {
+          return info.range.intersectsNode(en.node);
+        } catch (e) {
+          return false;
+        }
+      });
+    }
+    return entry || null;
+  }
+
+  async function processSelection() {
+    if (!gloss.enabled || state.mode !== "translated") return;
+    const info = getSelectionInfo();
+    if (!info) {
+      hideTip();
+      return;
+    }
+    // Ignore selections inside our own tooltip.
+    if (
+      info.node &&
+      info.node.parentElement &&
+      info.node.parentElement.closest("#__ts_gloss_tip")
+    ) {
+      return;
+    }
+    const entry = findEntryForSelection(info);
+    if (!entry || !entry.original) {
+      hideTip();
+      return;
+    }
+    const phrase = info.text;
+    if (!/[\p{L}\p{N}]/u.test(phrase)) {
+      hideTip();
+      return;
+    }
+
+    const rect = info.range.getBoundingClientRect();
+    const x = rect.left;
+    const y = rect.bottom;
+
+    const key = entry.original + "::" + phrase;
+    if (key === gloss.lastKey && gloss.tip && gloss.tip.style.opacity === "1") {
+      positionTip(x, y);
+      return;
+    }
+    gloss.lastKey = key;
+    renderTip(x, y, { loading: true });
+
+    const myReq = ++gloss.reqId;
+    const back = await TSGloss.backTranslate(
+      phrase,
+      state.targetLanguage,
+      state.sourceLanguage
+    );
+    if (myReq !== gloss.reqId) return; // a newer selection superseded this one
+
+    if (!back) {
+      renderTip(x, y, {
+        word: phrase,
+        original: "origin model not ready - open the popup and click 'Download translation models'",
+        approximate: true
+      });
+      return;
+    }
+    const found = TSGloss.locate(back, entry.original);
+    renderTip(x, y, {
+      word: phrase,
+      original: found ? found.text : back,
+      approximate: !found || found.approximate
+    });
+  }
+
+  function onGlossMouseUp() {
+    if (!gloss.enabled || state.mode !== "translated") return;
+    // Let the selection settle before reading it.
+    clearTimeout(gloss.timer);
+    gloss.timer = setTimeout(processSelection, 0);
+  }
+
+  function onGlossSelectionChange() {
+    const sel = window.getSelection && window.getSelection();
+    if (!sel || sel.isCollapsed) hideTip();
+  }
+
+  function onGlossScroll() {
+    hideTip();
+  }
+
+  function onGlossKey(e) {
+    if (e.key === "Escape") hideTip();
+  }
+
+  function enableGloss() {
+    if (gloss.enabled || state.usingFallback) return;
+    if (typeof TSGloss === "undefined") return;
+    if (!("Translator" in self)) return;
+    ensureGlossUi();
+    document.addEventListener("mouseup", onGlossMouseUp);
+    document.addEventListener("selectionchange", onGlossSelectionChange);
+    window.addEventListener("scroll", onGlossScroll, { passive: true, capture: true });
+    document.addEventListener("keydown", onGlossKey);
+    gloss.enabled = true;
+  }
+
+  function disableGloss() {
+    if (!gloss.enabled) return;
+    clearTimeout(gloss.timer);
+    document.removeEventListener("mouseup", onGlossMouseUp);
+    document.removeEventListener("selectionchange", onGlossSelectionChange);
+    window.removeEventListener("scroll", onGlossScroll, { capture: true });
+    document.removeEventListener("keydown", onGlossKey);
+    hideTip();
+    gloss.enabled = false;
   }
 
   // ----------------------------------------------- built-in Translator path
@@ -322,6 +569,7 @@
 
     state.translatedOnce = true;
     state.mode = "translated";
+    enableGloss();
     hideToast();
     toast(`Translated ${source} -> ${target}`);
     return true;

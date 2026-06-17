@@ -70,7 +70,7 @@ async function toggleActiveTab(tab) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: false },
-      files: ["content.js"]
+      files: ["gloss.js", "content.js"]
     });
   } catch (err) {
     console.error("Translate Switch: injection failed", err);

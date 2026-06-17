@@ -57,6 +57,28 @@ by normal page scripts, so PDFs use a dedicated viewer.
   (`chrome://extensions` -> Translate Switch -> Details).
 - The same language pair and on-device models are used as for web pages.
 
+### See a word's origin (back-translation gloss)
+
+When you are reading translated text, you can check where a word came from:
+
+- **Select** a translated word or phrase with the mouse (double-click a word, or
+  click-drag a phrase).
+  - On a **web page**, a tooltip shows the **original word** in the source
+    language.
+  - In a **PDF**, the matching word(s) are also **highlighted on the original
+    page** in the left column.
+- Example: on the English translation of a Norwegian page, selecting
+  "care responsibility" reveals it came from **"omsorgsansvar"**.
+- How it works: the built-in translator returns no word alignment, so the
+  extension **back-translates** the hovered word on-device (target -> source)
+  and fuzzy-matches it against the known source text. Approximate matches are
+  prefixed with "≈".
+- This needs the **reverse-direction** model (e.g. both `en -> no` and
+  `no -> en`). The popup's "Download translation models" prepares both
+  directions of your pair.
+- It works only on **built-in-translated** content (not the Google Translate
+  fallback) and only while the **translation** is shown.
+
 ## Requirements
 
 - **Chrome 138+ on desktop** (Windows, macOS, Linux, ChromeOS) for the built-in
@@ -111,7 +133,11 @@ Shortcut ──> background.js ──(chrome.scripting)──> content.js (activ
 - `popup.html` / `popup.js` — target language selection and quick actions.
 - `pdf/viewer.html` / `pdf/viewer.css` / `pdf/viewer.js` — side-by-side PDF
   viewer: PDF.js renders each page (left) and translates its extracted text
-  (right), with an Original/Translated toggle and lazy, cached per-page work.
+  (right), with an Original/Translated toggle, lazy cached per-page work, and the
+  selection word-origin gloss (highlight boxes overlaid on the original page).
+- `gloss.js` — shared word-origin helpers (`globalThis.TSGloss`): on-device
+  back-translation cache, fuzzy source location, and word/selection hit-testing.
+  Used by both `content.js` (injected before it) and the PDF viewer.
 - `vendor/pdfjs/` — bundled [PDF.js](https://mozilla.github.io/pdf.js/) build
   (no remote code, as required by MV3).
 
@@ -126,3 +152,7 @@ Shortcut ──> background.js ──(chrome.scripting)──> content.js (activ
   (no OCR). The translated text is reflowed, not pixel-aligned to the original
   lines, and auth-gated PDFs may fail to load if cookies aren't sent. The PDF
   viewer requires the built-in `Translator` API (no Google fallback).
+- **Word origin:** the mapping is a back-translation estimate, so it can differ
+  from the literal source for idioms or function words (such cases are flagged
+  with "≈"). It needs the reverse-direction model and works only on
+  built-in-translated content, not the Google fallback or scanned PDFs.

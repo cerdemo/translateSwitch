@@ -343,13 +343,18 @@ function makeRecord(num) {
     num,
     row,
     canvasCol,
+    canvasWrap,
     textBody,
     rendered: false,
     extracted: false,
     translated: false,
     processing: false,
     originalText: "",
-    translatedText: ""
+    translatedText: "",
+    highlightLayer: null,
+    spanText: "",
+    words: [],
+    glossCache: new Map()
   };
 }
 
@@ -379,20 +384,109 @@ function renderTextBody(rec) {
   }
 }
 
-async function renderCanvas(rec, page) {
+// Build per-word boxes (in viewport/CSS pixels at RENDER_SCALE) plus a parallel
+// source-text string with char offsets, so a located source range can be mapped
+// to exact rectangles over the rendered page. Geometry comes from the same
+// viewport transform used to paint the canvas, so highlights always align.
+function buildWordIndex(rec, textContent, viewport) {
+  const items = (textContent.items || []).filter(
+    (it) => it && typeof it.str === "string" && it.transform
+  );
+  let text = "";
+  const words = [];
+  const wordRe = /\S+/g;
+
+  for (const it of items) {
+    const str = it.str;
+    if (!str || !str.trim()) {
+      if (it.hasEOL && text && !text.endsWith(" ")) text += " ";
+      continue;
+    }
+    const tx = pdfjsLib.Util.transform(viewport.transform, it.transform);
+    const fontHeight = Math.hypot(tx[2], tx[3]) || 10;
+    const itemLeft = tx[4];
+    const itemTop = tx[5] - fontHeight;
+    const itemWidth = (it.width || 0) * viewport.scale;
+    const len = str.length;
+
+    let m;
+    wordRe.lastIndex = 0;
+    while ((m = wordRe.exec(str)) !== null) {
+      const startFrac = len ? m.index / len : 0;
+      const widthFrac = len ? m[0].length / len : 1;
+      const start = text.length;
+      text += m[0];
+      words.push({
+        start,
+        end: text.length,
+        left: itemLeft + itemWidth * startFrac,
+        top: itemTop,
+        width: itemWidth * widthFrac,
+        height: fontHeight
+      });
+      text += " ";
+    }
+  }
+
+  rec.spanText = text;
+  rec.words = words;
+}
+
+async function renderCanvas(rec, page, textContent) {
   const viewport = page.getViewport({ scale: RENDER_SCALE });
+
+  const pageScale = document.createElement("div");
+  pageScale.className = "page-scale";
+
+  const pdfPage = document.createElement("div");
+  pdfPage.className = "pdf-page";
+  pdfPage.style.width = viewport.width + "px";
+  pdfPage.style.height = viewport.height + "px";
+
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   const ratio = window.devicePixelRatio || 1;
   canvas.width = Math.floor(viewport.width * ratio);
   canvas.height = Math.floor(viewport.height * ratio);
-  canvas.style.width = "100%";
-  rec.canvasCol.querySelector("div").appendChild(canvas);
+  canvas.style.width = viewport.width + "px";
+  canvas.style.height = viewport.height + "px";
+  pdfPage.appendChild(canvas);
+
+  const hlLayer = document.createElement("div");
+  hlLayer.className = "highlight-layer";
+  pdfPage.appendChild(hlLayer);
+  rec.highlightLayer = hlLayer;
+
+  pageScale.appendChild(pdfPage);
+  rec.canvasWrap.appendChild(pageScale);
+
   await page.render({
     canvasContext: ctx,
     viewport,
     transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : undefined
   }).promise;
+
+  try {
+    buildWordIndex(rec, textContent || (await page.getTextContent()), viewport);
+  } catch (e) {
+    // Highlighting just won't be available for this page.
+  }
+
+  // Scale the whole page (canvas + overlay together) to fit the column; the
+  // highlight overlay uses the same coordinate space so it stays aligned.
+  const applyScale = () => {
+    const avail = pageScale.clientWidth;
+    if (!avail) return;
+    const scale = Math.min(1, avail / viewport.width);
+    pdfPage.style.transform = `scale(${scale})`;
+    pageScale.style.height = viewport.height * scale + "px";
+  };
+  applyScale();
+  try {
+    new ResizeObserver(applyScale).observe(pageScale);
+  } catch (e) {
+    window.addEventListener("resize", applyScale);
+  }
 }
 
 async function processPage(rec) {
@@ -400,14 +494,14 @@ async function processPage(rec) {
   rec.processing = true;
   try {
     const page = await app.pdf.getPage(rec.num);
+    const textContent = await page.getTextContent();
 
     if (!rec.rendered) {
-      await renderCanvas(rec, page);
+      await renderCanvas(rec, page, textContent);
       rec.rendered = true;
     }
 
     if (!rec.extracted) {
-      const textContent = await page.getTextContent();
       rec.originalText = itemsToText(textContent);
       rec.extracted = true;
       renderTextBody(rec);
@@ -439,6 +533,7 @@ function setMode(mode) {
   app.mode = mode;
   els.btnOriginal.classList.toggle("is-active", mode === "original");
   els.btnTranslated.classList.toggle("is-active", mode === "translated");
+  hideTip();
   for (const rec of app.records) {
     if (rec.extracted) renderTextBody(rec);
     // Switching to translated may reveal pages that have not been translated
@@ -451,6 +546,192 @@ function setMode(mode) {
 
 els.btnOriginal.addEventListener("click", () => setMode("original"));
 els.btnTranslated.addEventListener("click", () => setMode("translated"));
+
+// ----------------------------------------------------- word origin gloss
+const gloss = {
+  tip: document.getElementById("gloss-tip"),
+  activeLayer: null,
+  timer: null,
+  reqId: 0,
+  lastKey: null
+};
+
+function clearGlossHighlight() {
+  if (gloss.activeLayer) {
+    gloss.activeLayer.textContent = "";
+    gloss.activeLayer = null;
+  }
+}
+
+// Draw highlight boxes over the words whose spanText offsets fall in [start,end).
+function highlightSourceRange(rec, start, end) {
+  if (!rec.highlightLayer || !rec.words) return false;
+  clearGlossHighlight();
+  let drew = false;
+  for (const w of rec.words) {
+    if (w.end <= start || w.start >= end) continue; // no overlap
+    const box = document.createElement("div");
+    box.className = "highlight-box";
+    box.style.left = w.left + "px";
+    box.style.top = w.top + "px";
+    box.style.width = Math.max(2, w.width) + "px";
+    box.style.height = w.height + "px";
+    rec.highlightLayer.appendChild(box);
+    drew = true;
+  }
+  if (drew) gloss.activeLayer = rec.highlightLayer;
+  return drew;
+}
+
+function recordFromNode(node) {
+  let el = node && node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+  while (el && el !== document.body) {
+    if (el.classList && el.classList.contains("text-body")) {
+      return app.records.find((r) => r.textBody === el) || null;
+    }
+    el = el.parentElement;
+  }
+  return null;
+}
+
+function positionTip(x, y) {
+  const tip = gloss.tip;
+  if (!tip) return;
+  const pad = 14;
+  const rect = tip.getBoundingClientRect();
+  let left = x + pad;
+  let top = y + pad;
+  if (left + rect.width > window.innerWidth - 8) left = Math.max(8, x - pad - rect.width);
+  if (top + rect.height > window.innerHeight - 8) top = Math.max(8, y - pad - rect.height);
+  tip.style.left = left + "px";
+  tip.style.top = top + "px";
+}
+
+function renderTip(x, y, parts) {
+  const tip = gloss.tip;
+  if (!tip) return;
+  tip.textContent = "";
+  if (parts.loading) {
+    tip.textContent = "Looking up origin...";
+  } else {
+    const orig = document.createElement("div");
+    orig.className = "gloss-origin";
+    orig.textContent = (parts.approximate ? "≈ " : "") + parts.original;
+    tip.appendChild(orig);
+    const cap = document.createElement("div");
+    cap.className = "gloss-caption";
+    cap.textContent = `${app.target} "${parts.word}" -> ${app.source}`;
+    tip.appendChild(cap);
+  }
+  tip.classList.add("is-visible");
+  positionTip(x, y);
+}
+
+function hideTip() {
+  if (gloss.tip) gloss.tip.classList.remove("is-visible");
+  gloss.lastKey = null;
+  clearGlossHighlight();
+}
+
+function getSelectionInfo() {
+  const sel = window.getSelection && window.getSelection();
+  if (!sel || sel.isCollapsed) return null;
+  const text = sel.toString().trim();
+  if (!text) return null;
+  let range;
+  try {
+    range = sel.getRangeAt(0);
+  } catch (e) {
+    return null;
+  }
+  return { text, range, node: range.startContainer };
+}
+
+async function processSelection() {
+  if (app.mode !== "translated") {
+    hideTip();
+    return;
+  }
+  const info = getSelectionInfo();
+  if (!info) {
+    hideTip();
+    return;
+  }
+  // Only react to selections made in the translated (right) column.
+  const rec = recordFromNode(info.node);
+  if (!rec || !rec.spanText) {
+    hideTip();
+    return;
+  }
+  const phrase = info.text;
+  if (!/[\p{L}\p{N}]/u.test(phrase)) {
+    hideTip();
+    return;
+  }
+
+  const rect = info.range.getBoundingClientRect();
+  const x = rect.left;
+  const y = rect.bottom;
+
+  const key = rec.num + "::" + phrase;
+  if (key === gloss.lastKey && gloss.tip.classList.contains("is-visible")) {
+    positionTip(x, y);
+    return;
+  }
+  gloss.lastKey = key;
+  clearGlossHighlight();
+  renderTip(x, y, { loading: true });
+
+  const myReq = ++gloss.reqId;
+  let result = rec.glossCache.get(phrase);
+  if (!result) {
+    const back = await TSGloss.backTranslate(phrase, app.target, app.source);
+    if (myReq !== gloss.reqId) return;
+    const found = back ? TSGloss.locate(back, rec.spanText) : null;
+    result = { back, found };
+    rec.glossCache.set(phrase, result);
+  }
+  if (myReq !== gloss.reqId) return;
+
+  if (!result.back) {
+    renderTip(x, y, {
+      word: phrase,
+      original: "origin model not ready - click 'Download translation models' in the popup",
+      approximate: true
+    });
+    return;
+  }
+  const original = result.found ? result.found.text : result.back;
+  renderTip(x, y, {
+    word: phrase,
+    original,
+    approximate: !result.found || result.found.approximate
+  });
+
+  if (result.found) {
+    highlightSourceRange(rec, result.found.start, result.found.end);
+  }
+}
+
+els.pages.addEventListener("mouseup", () => {
+  if (typeof TSGloss === "undefined") return;
+  clearTimeout(gloss.timer);
+  gloss.timer = setTimeout(processSelection, 0);
+});
+document.addEventListener("selectionchange", () => {
+  const sel = window.getSelection && window.getSelection();
+  if (!sel || sel.isCollapsed) hideTip();
+});
+els.pages.addEventListener(
+  "scroll",
+  () => {
+    hideTip();
+  },
+  { passive: true }
+);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") hideTip();
+});
 
 // --------------------------------------------------------------------- init
 async function init() {
