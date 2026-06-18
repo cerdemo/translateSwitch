@@ -38,6 +38,13 @@
     })();
 
     translatorCache.set(key, promise);
+    // Don't cache failures/"not ready yet" forever: drop the entry so a later
+    // lookup retries once the model has finished downloading.
+    promise
+      .then((t) => {
+        if (!t) translatorCache.delete(key);
+      })
+      .catch(() => translatorCache.delete(key));
     return promise;
   }
 
@@ -127,34 +134,63 @@
   // Returns { start, end, text, approximate, score } or null.
   function locate(backText, sourceText, opts = {}) {
     const threshold = opts.threshold == null ? 0.55 : opts.threshold;
-    const normBack = normalize(backText);
+    // Normalize the back-translation through the same token pipeline used for
+    // candidates so surrounding punctuation never skews the similarity score.
+    const backTokens = tokenize(backText)
+      .map((t) => normalizeToken(t.text))
+      .filter(Boolean);
+    const normBack = backTokens.join(" ");
     if (!normBack || !sourceText) return null;
 
     const tokens = tokenize(sourceText);
     if (!tokens.length) return null;
     const normTokens = tokens.map((t) => normalizeToken(t.text));
 
-    const wordCount = normBack.split(" ").filter(Boolean).length;
+    const wordCount = backTokens.length;
     const windowSizes = new Set(
       [wordCount, wordCount + 1, Math.max(1, wordCount - 1)].filter((n) => n >= 1)
     );
+    // backText and sourceText are the same language, so literal token overlap is
+    // a dependable signal. We use it to break ties between windows that score
+    // equally on character similarity (e.g. a word repeated across the page).
+    const backCounts = new Map();
+    for (const t of backTokens) backCounts.set(t, (backCounts.get(t) || 0) + 1);
 
     let best = null;
     for (const w of windowSizes) {
       for (let i = 0; i + w <= tokens.length; i++) {
-        const candidate = normTokens.slice(i, i + w).join(" ");
+        const candTokens = normTokens.slice(i, i + w);
+        const candidate = candTokens.join(" ");
         if (!candidate) continue;
         const score = similarity(candidate, normBack);
-        if (!best || score > best.score) {
+
+        const seen = new Map();
+        let overlap = 0;
+        for (const ct of candTokens) {
+          const cap = backCounts.get(ct) || 0;
+          const used = seen.get(ct) || 0;
+          if (used < cap) {
+            overlap++;
+            seen.set(ct, used + 1);
+          }
+        }
+        const overlapRatio = overlap / Math.max(candTokens.length, wordCount);
+
+        const better =
+          !best ||
+          score > best.score + 1e-9 ||
+          (Math.abs(score - best.score) <= 1e-9 && overlapRatio > best.overlap);
+        if (better) {
           best = {
             score,
+            overlap: overlapRatio,
             start: tokens[i].start,
             end: tokens[i + w - 1].end
           };
-          if (score === 1) break;
         }
+        if (score >= 0.999 && overlapRatio >= 1) break;
       }
-      if (best && best.score === 1) break;
+      if (best && best.score >= 0.999 && best.overlap >= 1) break;
     }
 
     if (!best || best.score < threshold) return null;

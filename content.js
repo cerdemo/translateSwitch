@@ -243,7 +243,9 @@
     highlight: null,
     timer: null,
     reqId: 0,
-    lastKey: null
+    lastKey: null,
+    moved: false,
+    dragging: false
   };
 
   function ensureGlossUi() {
@@ -262,9 +264,13 @@
         boxShadow: "0 6px 20px rgba(0,0,0,0.3)",
         opacity: "0",
         transition: "opacity 0.12s ease",
-        pointerEvents: "none"
+        pointerEvents: "none",
+        cursor: "move",
+        userSelect: "none"
       });
+      tip.title = "Drag to move";
       document.documentElement.appendChild(tip);
+      enableTipDrag(tip);
       gloss.tip = tip;
     }
     if (
@@ -295,6 +301,38 @@
     } catch (e) {
       /* noop */
     }
+  }
+
+  function enableTipDrag(tip) {
+    let dx = 0;
+    let dy = 0;
+    const onMove = (e) => {
+      const rect = tip.getBoundingClientRect();
+      let left = e.clientX - dx;
+      let top = e.clientY - dy;
+      left = Math.max(8, Math.min(left, window.innerWidth - rect.width - 8));
+      top = Math.max(8, Math.min(top, window.innerHeight - rect.height - 8));
+      tip.style.left = left + "px";
+      tip.style.top = top + "px";
+    };
+    const onUp = (e) => {
+      gloss.dragging = false;
+      document.removeEventListener("mousemove", onMove, true);
+      document.removeEventListener("mouseup", onUp, true);
+      e.stopPropagation();
+      e.preventDefault();
+    };
+    tip.addEventListener("mousedown", (e) => {
+      const rect = tip.getBoundingClientRect();
+      dx = e.clientX - rect.left;
+      dy = e.clientY - rect.top;
+      gloss.dragging = true;
+      gloss.moved = true;
+      document.addEventListener("mousemove", onMove, true);
+      document.addEventListener("mouseup", onUp, true);
+      e.stopPropagation();
+      e.preventDefault();
+    });
   }
 
   function positionTip(x, y) {
@@ -335,12 +373,18 @@
       tip.appendChild(cap);
     }
     tip.style.opacity = "1";
+    tip.style.pointerEvents = "auto";
     positionTip(x, y);
   }
 
   function hideTip() {
-    if (gloss.tip) gloss.tip.style.opacity = "0";
+    if (gloss.dragging) return;
+    if (gloss.tip) {
+      gloss.tip.style.opacity = "0";
+      gloss.tip.style.pointerEvents = "none";
+    }
     gloss.lastKey = null;
+    gloss.moved = false;
     setGlossHighlight(null);
   }
 
@@ -415,10 +459,11 @@
 
     const key = state.mode + "::" + searchText + "::" + phrase;
     if (key === gloss.lastKey && gloss.tip && gloss.tip.style.opacity === "1") {
-      positionTip(x, y);
+      if (!gloss.moved) positionTip(x, y);
       return;
     }
     gloss.lastKey = key;
+    gloss.moved = false;
     renderTip(x, y, {
       loading: true,
       loadingText: translatedMode ? "Looking up origin..." : "Looking up translation..."
@@ -498,6 +543,49 @@
     gloss.enabled = false;
   }
 
+  // Create a Translator, surfacing download progress. Returns null (instead of
+  // throwing) when the one-time download cannot be started because there is no
+  // user activation - keyboard shortcuts don't grant it, so we handle this
+  // gracefully rather than showing a scary failure.
+  async function createTranslator(options, needsDownload) {
+    try {
+      return await Translator.create({
+        ...options,
+        monitor(m) {
+          m.addEventListener("downloadprogress", (e) => {
+            if (!needsDownload) return;
+            const pct = Math.round((e.loaded || 0) * 100);
+            toast(`Downloading model... ${pct}%`, { sticky: true });
+          });
+        }
+      });
+    } catch (e) {
+      if (e && e.name === "NotAllowedError") return null;
+      throw e;
+    }
+  }
+
+  // Poll availability until the model is ready (a download kicked off elsewhere
+  // finished) or we time out. Resolves true only when "available".
+  function waitForModel(options, timeoutMs) {
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const check = async () => {
+        let a;
+        try {
+          a = await Translator.availability(options);
+        } catch (e) {
+          a = "unavailable";
+        }
+        if (a === "available") return resolve(true);
+        if (a === "unavailable") return resolve(false);
+        if (Date.now() - start >= timeoutMs) return resolve(false);
+        setTimeout(check, 1500);
+      };
+      check();
+    });
+  }
+
   // ----------------------------------------------- built-in Translator path
   async function translateBuiltIn(pair) {
     const nodes = collectTextNodes();
@@ -543,25 +631,26 @@
       { sticky: true }
     );
 
-    let translator;
-    try {
-      translator = await Translator.create({
-        ...options,
-        monitor(m) {
-          m.addEventListener("downloadprogress", (e) => {
-            if (!needsDownload) return;
-            const pct = Math.round((e.loaded || 0) * 100);
-            toast(`Downloading model... ${pct}%`, { sticky: true });
-          });
-        }
+    let translator = await createTranslator(options, needsDownload);
+
+    // The one-time download needs a user gesture that a shortcut can't provide.
+    // The attempt above usually starts the download anyway, so wait for it to
+    // finish and retry - the same keypress then succeeds, with no error toast.
+    if (!translator) {
+      toast("Preparing translation model (one-time download)...", {
+        sticky: true
       });
-    } catch (e) {
-      if (e && e.name === "NotAllowedError") {
-        throw new Error(
-          "First-time model download needed. Open the Translate Switch popup and click 'Download translation models', then use the shortcut."
-        );
-      }
-      throw e;
+      const ready = await waitForModel(options, 120000);
+      if (ready) translator = await createTranslator(options, false);
+    }
+
+    if (!translator) {
+      hideToast();
+      toast(
+        "One-time model download is still preparing. If it stalls, open the popup and click 'Download translation models', then try again.",
+        { duration: 6000 }
+      );
+      return "download-pending";
     }
 
     state.entries = [];
@@ -709,6 +798,7 @@
           toast("Built-in model unavailable for this pair, trying fallback...");
           await translateFallback(pair);
         }
+        // "download-pending" already showed a calm, non-error message.
       } else {
         await translateFallback(pair);
       }

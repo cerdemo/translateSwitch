@@ -553,8 +553,46 @@ const gloss = {
   activeLayer: null,
   timer: null,
   reqId: 0,
-  lastKey: null
+  lastKey: null,
+  moved: false,
+  dragging: false
 };
+
+function enableTipDrag(tip) {
+  if (!tip) return;
+  tip.title = "Drag to move";
+  let dx = 0;
+  let dy = 0;
+  const onMove = (e) => {
+    const rect = tip.getBoundingClientRect();
+    let left = e.clientX - dx;
+    let top = e.clientY - dy;
+    left = Math.max(8, Math.min(left, window.innerWidth - rect.width - 8));
+    top = Math.max(8, Math.min(top, window.innerHeight - rect.height - 8));
+    tip.style.left = left + "px";
+    tip.style.top = top + "px";
+  };
+  const onUp = (e) => {
+    gloss.dragging = false;
+    document.removeEventListener("mousemove", onMove, true);
+    document.removeEventListener("mouseup", onUp, true);
+    e.stopPropagation();
+    e.preventDefault();
+  };
+  tip.addEventListener("mousedown", (e) => {
+    const rect = tip.getBoundingClientRect();
+    dx = e.clientX - rect.left;
+    dy = e.clientY - rect.top;
+    gloss.dragging = true;
+    gloss.moved = true;
+    document.addEventListener("mousemove", onMove, true);
+    document.addEventListener("mouseup", onUp, true);
+    e.stopPropagation();
+    e.preventDefault();
+  });
+}
+
+enableTipDrag(gloss.tip);
 
 function clearGlossHighlight() {
   if (gloss.activeLayer) {
@@ -628,8 +666,10 @@ function renderTip(x, y, parts) {
 }
 
 function hideTip() {
+  if (gloss.dragging) return;
   if (gloss.tip) gloss.tip.classList.remove("is-visible");
   gloss.lastKey = null;
+  gloss.moved = false;
   clearGlossHighlight();
 }
 
@@ -678,10 +718,11 @@ async function processSelection() {
 
   const key = app.mode + "::" + rec.num + "::" + phrase;
   if (key === gloss.lastKey && gloss.tip.classList.contains("is-visible")) {
-    positionTip(x, y);
+    if (!gloss.moved) positionTip(x, y);
     return;
   }
   gloss.lastKey = key;
+  gloss.moved = false;
   clearGlossHighlight();
   renderTip(x, y, {
     loading: true,
